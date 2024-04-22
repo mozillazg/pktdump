@@ -44,7 +44,8 @@ func formatPacketTCP(tcp *layers.TCP, src, dst string, length int) string {
 		flags = "none"
 	}
 	out := fmt.Sprintf("%s.%d > %s.%d: Flags [%s]", src, tcp.SrcPort, dst, tcp.DstPort, flags)
-	if length > 0 || tcp.SYN || tcp.FIN || tcp.RST {
+	out += fmt.Sprintf(", cksum 0x%x", tcp.Checksum)
+	if length > 0 || tcp.SYN || tcp.FIN || tcp.RST || tcp.ACK {
 		if length > 0 {
 			out += fmt.Sprintf(", seq %d:%d", tcp.Seq, int(tcp.Seq)+length)
 		} else {
