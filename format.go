@@ -4,6 +4,7 @@ package pktdump
 import (
 	"encoding/binary"
 	"fmt"
+	"strings"
 
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
@@ -418,6 +419,19 @@ func formatPacketPPP(ppp *layers.PPP) string {
 	}
 }
 
+func formatIPv4(ipv4 *layers.IPv4) string {
+	fields := []string{}
+	fields = append(fields, fmt.Sprintf("tos 0x%x", ipv4.TOS))
+	fields = append(fields, fmt.Sprintf("ttl %d", ipv4.TTL))
+	fields = append(fields, fmt.Sprintf("id %d", ipv4.Id))
+	fields = append(fields, fmt.Sprintf("offset %d", ipv4.FragOffset))
+	fields = append(fields, fmt.Sprintf("flags [%s]", ipv4.Flags.String()))
+	fields = append(fields, fmt.Sprintf("ip_proto %s (%d)", ipv4.Protocol.String(), ipv4.Protocol))
+	fields = append(fields, fmt.Sprintf("length %d", ipv4.Length))
+
+	return strings.Join(fields, ", ")
+}
+
 // Format parses a packet and returns a string with a textual representation similar to the tcpdump output
 func Format(packet gopacket.Packet) string {
 	var net gopacket.Layer
@@ -430,7 +444,7 @@ func Format(packet gopacket.Packet) string {
 	var length int
 	switch net := net.(type) {
 	case *layers.IPv4:
-		prefix = "IP "
+		prefix = fmt.Sprintf("IP (%s)\n    ", formatIPv4(net))
 		nextLayerType = net.NextLayerType()
 		nextLayerPayload = net.LayerPayload()
 		src = net.SrcIP.String()
