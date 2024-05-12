@@ -433,11 +433,39 @@ func formatIPv4(ipv4 *layers.IPv4) string {
 	return strings.Join(fields, ", ")
 }
 
+func formatLinkLayer(packet gopacket.Packet) string {
+	var layer gopacket.Layer
+	if layer = packet.LinkLayer(); layer == nil {
+		return ""
+	}
+
+	var nextLayerType gopacket.LayerType
+	var length int
+	switch layer := layer.(type) {
+	case *layers.Ethernet:
+		nextLayerType = layer.NextLayerType()
+		length = len(layer.LayerPayload())
+		break
+	default:
+		return formatUnknown(layer, packet)
+	}
+
+	switch nextLayerType {
+	case layers.LayerTypeARP:
+		if ly := packet.Layer(layers.LayerTypeARP); ly != nil {
+			arp, _ := ly.(*layers.ARP)
+			return formatARP(arp, length)
+		}
+	}
+
+	return ""
+}
+
 // Format parses a packet and returns a string with a textual representation similar to the tcpdump output
 func Format(packet gopacket.Packet) string {
 	var net gopacket.Layer
 	if net = packet.NetworkLayer(); net == nil {
-		return ""
+		return formatLinkLayer(packet)
 	}
 	var prefix, src, dst string
 	var nextLayerType gopacket.LayerType
@@ -459,7 +487,7 @@ func Format(packet gopacket.Packet) string {
 		dst = net.DstIP.String()
 		length = int(net.Length)
 	default:
-		return ""
+		return formatUnknown(net, packet)
 	}
 	switch nextLayerType {
 	case layers.LayerTypeUDP:
