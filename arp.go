@@ -2,12 +2,13 @@ package pktdump
 
 import (
 	"fmt"
-	"github.com/gopacket/gopacket/layers"
 	"net"
 	"strings"
+
+	"github.com/gopacket/gopacket/layers"
 )
 
-func formatARP(arp *layers.ARP, length int) string {
+func formatARP(arp *layers.ARP, length int, style FormatStyle) string {
 	builder := strings.Builder{}
 	builder.WriteString("ARP")
 
