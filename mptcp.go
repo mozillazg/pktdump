@@ -229,11 +229,14 @@ func mpCapablePrint(options *mptcpPrintOptions, opt layers.TCPOption, buf *strin
 	case opt.OptionMPTCPMpCapable.H:
 		flags = append(flags, "H")
 	}
+
 	flagsStr := strings.Join(flags, " ")
 	if flagsStr == "" {
 		flagsStr = "none"
 	}
-	buf.WriteString(fmt.Sprintf(" flags [%s]", flagsStr))
+	if flagsStr != "A" {
+		buf.WriteString(fmt.Sprintf(" flags [%s]", flagsStr))
+	}
 
 	csumEnabled := opt.OptionMPTCPMpCapable.A
 	if csumEnabled {
@@ -364,12 +367,13 @@ func addAddrPrint(options *mptcpPrintOptions, opt layers.TCPOption, buf *strings
 	addAddr.Kind = uint8(opt.OptionType)
 	addAddr.Len = opt.OptionLength
 	addAddr.AddrID = opt.OptionMPTCPAddAddr.AddrID
-
-	subEchoStr := tok2str(MPTCPAddrSubEchoBits, "[bad version/echo]", uint32(opt.OptionMPTCPAddAddr.IPVer))
-	buf.WriteString(fmt.Sprintf(" %s", subEchoStr))
+	addAddr.SubEcho = opt.OptionMPTCPAddAddr.IPVer
 	if opt.OptionMPTCPAddAddr.E {
-		buf.WriteString(" flags [E]")
+		addAddr.SubEcho = 0x01
 	}
+
+	subEchoStr := tok2str(MPTCPAddrSubEchoBits, "[bad version/echo]", uint32(addAddr.SubEcho))
+	buf.WriteString(fmt.Sprintf(" %s", subEchoStr))
 	buf.WriteString(fmt.Sprintf(" id %d", addAddr.AddrID))
 
 	buf.WriteString(fmt.Sprintf(" %s", opt.OptionMPTCPAddAddr.Address))
