@@ -9,4 +9,4 @@ require (
 	golang.org/x/sys v0.17.0 // indirect
 )
 
-replace github.com/gopacket/gopacket => github.com/mozillazg/gopacket v0.0.0-20240928025743-af4d18b65a70
+replace github.com/gopacket/gopacket => github.com/mozillazg/gopacket v0.0.0-20240929131848-5b85f4bf5509
