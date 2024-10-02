@@ -240,9 +240,7 @@ func mpCapablePrint(options *mptcpPrintOptions, opt layers.TCPOption, buf *strin
 	if flagsStr == "" {
 		flagsStr = "none"
 	}
-	if flagsStr != "A" {
-		buf.WriteString(fmt.Sprintf(" flags [%s]", flagsStr))
-	}
+	buf.WriteString(fmt.Sprintf(" flags [%s]", flagsStr))
 
 	csumEnabled := opt.OptionMPTCPMpCapable.A
 	if csumEnabled {
