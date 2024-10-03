@@ -76,6 +76,8 @@ func formatPacketTCP(tcp *layers.TCP, src, dst string, length int, style FormatS
 				out += "eol"
 			case layers.TCPOptionKindWindowScale:
 				out += fmt.Sprintf("wscale %d", opt.OptionData[0])
+			case layers.TCPOptionKindSACK:
+				out += formatSack(tcp, opt)
 			case layers.TCPOptionKindSACKPermitted:
 				out += "sackOK"
 			case layers.TCPOptionKindTimestamps:
