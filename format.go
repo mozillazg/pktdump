@@ -84,6 +84,8 @@ func formatPacketTCP(tcp *layers.TCP, src, dst string, length int, style FormatS
 				out += fmt.Sprintf("TS val %d ecr %d", binary.BigEndian.Uint32(opt.OptionData[:4]), binary.BigEndian.Uint32(opt.OptionData[4:8]))
 			case layers.TCPOptionKindMultipathTCP:
 				out += formatMPTCP(opt)
+			case TCPOptionKindFastopen:
+				out += formatFastOpen(tcp, opt)
 			default:
 				out += fmt.Sprintf("unknown-%d", opt.OptionType)
 				if len(opt.OptionData) > 0 {
