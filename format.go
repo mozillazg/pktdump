@@ -14,7 +14,7 @@ func (f *Formatter) formatPacketTCP(tcp *layers.TCP, src, dst string, length int
 	length -= int(tcp.DataOffset) * 4
 
 	if f.opts.Quiet {
-		return fmt.Sprintf("tcp %d", length)
+		return fmt.Sprintf("%s.%d > %s.%d: tcp %d", src, tcp.SrcPort, dst, tcp.DstPort, length)
 	}
 
 	flags := ""
