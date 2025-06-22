@@ -24,7 +24,7 @@ func TestPacketICMPv6(t *testing.T) {
 	}
 
 	for _, table := range tables {
-		got := formatPacketICMPv6(table.packet, table.icmp, table.src, table.dst, table.length)
+		got := NewFormatter(&Options{}).formatPacketICMPv6(table.packet, table.icmp, table.src, table.dst, table.length)
 		if got != table.expected {
 			t.Errorf("formatPacketICMPv6 was incorrect, got: '%s', expected: '%s'.", got, table.expected)
 		}
@@ -46,7 +46,7 @@ func TestPacketICMPv4(t *testing.T) {
 	}
 
 	for _, table := range tables {
-		got := formatPacketICMPv4(table.icmp, table.src, table.dst, table.length)
+		got := NewFormatter(&Options{}).formatPacketICMPv4(table.icmp, table.src, table.dst, table.length)
 		if got != table.expected {
 			t.Errorf("formatPacketICMPv4 was incorrect, got: '%s', expected: '%s'.", got, table.expected)
 		}
@@ -75,7 +75,7 @@ func TestPacketTCP(t *testing.T) {
 	}
 
 	for _, table := range tables {
-		got := formatPacketTCP(table.tcp, table.src, table.dst, table.length)
+		got := NewFormatter(&Options{}).formatPacketTCP(table.tcp, table.src, table.dst, table.length)
 		if got != table.expected {
 			t.Errorf("formatPacketTCP was incorrect, got: '%s', expected: '%s'.", got, table.expected)
 		}
@@ -97,7 +97,7 @@ func TestPacketUDP(t *testing.T) {
 	}
 
 	for _, table := range tables {
-		got := formatPacketUDP(table.packet, table.udp, table.src, table.dst)
+		got := NewFormatter(&Options{}).formatPacketUDP(table.packet, table.udp, table.src, table.dst)
 		if got != table.expected {
 			t.Errorf("formatPacketUDP was incorrect, got: '%s', expected: '%s'.", got, table.expected)
 		}
@@ -152,7 +152,7 @@ func TestPacketDNS(t *testing.T) {
 	}
 
 	for _, table := range tables {
-		got := formatPacketDNS(table.dns, table.src, table.dst, table.srcPort, table.dstPort, table.length)
+		got := NewFormatter(&Options{}).formatPacketDNS(table.dns, table.src, table.dst, table.srcPort, table.dstPort, table.length)
 		if got != table.expected {
 			t.Errorf("formatPacketDNS was incorrect, got: '%s', expected: '%s'.", got, table.expected)
 		}
@@ -188,4 +188,16 @@ func TestFormat(t *testing.T) {
 			t.Errorf("Format was incorrect, got: '%s', expected: '%s'.", got, table.expected)
 		}
 	}
+}
+
+func Test_foo(t *testing.T) {
+	packet := gopacket.NewPacket([]byte{
+		//0, 80, 86, 235, 188, 78, 0, 12, 41, 142, 49, 243, 8, 0,
+		79, 0, 0, 80, 29, 38, 0, 0, 64, 6, 48, 70, 10, 0, 2, 15, 1, 1, 1,
+		1, 7, 39, 8, 1, 2, 3, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 194, 0, 80, 111,
+		152, 56, 207, 17, 225, 164, 243, 80, 2, 2, 0, 56, 132, 0, 0}, layers.LayerTypeIPv4, gopacket.Default)
+
+	got := FormatWithStyle(packet, FormatStyleVerbose)
+	t.Log(got)
 }
