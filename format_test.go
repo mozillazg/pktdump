@@ -1,6 +1,12 @@
 package pktdump
 
 import (
+	"github.com/gopacket/gopacket/pcapgo"
+	"log"
+	"os"
+	"strings"
+	//"fmt"
+	//"log"
 	"testing"
 
 	"github.com/gopacket/gopacket"
@@ -75,7 +81,7 @@ func TestPacketTCP(t *testing.T) {
 	}
 
 	for _, table := range tables {
-		got := NewFormatter(&Options{}).formatPacketTCP(table.tcp, table.src, table.dst, table.length)
+		got := NewFormatter(&Options{}).formatPacketTCP(nil, table.tcp, table.src, table.dst, table.length)
 		if got != table.expected {
 			t.Errorf("formatPacketTCP was incorrect, got: '%s', expected: '%s'.", got, table.expected)
 		}
@@ -190,7 +196,7 @@ func TestFormat(t *testing.T) {
 	}
 }
 
-func Test_foo(t *testing.T) {
+func Test_ip_options(t *testing.T) {
 	packet := gopacket.NewPacket([]byte{
 		//0, 80, 86, 235, 188, 78, 0, 12, 41, 142, 49, 243, 8, 0,
 		79, 0, 0, 80, 29, 38, 0, 0, 64, 6, 48, 70, 10, 0, 2, 15, 1, 1, 1,
@@ -200,4 +206,31 @@ func Test_foo(t *testing.T) {
 
 	got := FormatWithStyle(packet, FormatStyleVerbose)
 	t.Log(got)
+	if !strings.Contains(got, "options (RR 1.2.3.4 1.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0,EOL))") {
+		t.Errorf("IP options were not formatted correctly, got: '%s'.", got)
+	}
+}
+
+func Test_tls(t *testing.T) {
+	file := "/go_workshop/src/github.com/mozillazg/ptcpdump/https.pcapng"
+	f, err := os.Open(file)
+	if err != nil {
+		log.Fatalf("Could not open pcap file '%s': %v\n", file, err)
+	}
+	defer f.Close()
+
+	handle, err := pcapgo.NewNgReader(f, pcapgo.DefaultNgReaderOptions)
+	if err != nil {
+		log.Fatalf("Could not create pcap reader: %v\n", err)
+	}
+
+	pkgsrc := gopacket.NewPacketSource(handle, handle.LinkType())
+
+	for packet := range pkgsrc.Packets() {
+		//if len(packet.Data()) < 1000 {
+		//	continue
+		//}
+		got := FormatWithStyle(packet, FormatStyleVerbose)
+		t.Log(got)
+	}
 }
