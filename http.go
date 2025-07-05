@@ -3,10 +3,26 @@ package pktdump
 import (
 	"bytes"
 	"github.com/gopacket/gopacket/layers"
+	"regexp"
 	"strings"
 )
 
-const httpPort = 80
+var reHttpCommonRequest = regexp.MustCompile(`(?m)^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|CONNECT|TRACE) /[^\r\n]* HTTP/2?(1\.[01])\r\n.{5,}`)
+var reHttpConnectRequest = regexp.MustCompile(`(?m)^CONNECT \S+(:\d+)? HTTP/2?(1\.[01])?\r\n.{5,}`)
+var reHttpResponse = regexp.MustCompile(`(?m)^HTTP/2?(1\.[01])? \d{3} [\sA-Za-z']+\r\n.{5,}`)
+var httpPrefixes = [][]byte{
+	[]byte("GET "),
+	[]byte("POST "),
+	[]byte("PUT "),
+	[]byte("DELETE "),
+	[]byte("HEAD "),
+	[]byte("OPTIONS "),
+	[]byte("PATCH "),
+	[]byte("CONNECT "),
+	[]byte("TRACE "),
+	[]byte("HTTP/1.0 "),
+	[]byte("HTTP/1.1 "),
+}
 
 func (f *Formatter) formatHttp(tcp *layers.TCP) string {
 	// GET / HTTP/1.1
@@ -15,18 +31,24 @@ func (f *Formatter) formatHttp(tcp *layers.TCP) string {
 		return ""
 	}
 
-	httpPorts := []int{}
-	if len(f.opts.httpPorts) > 0 {
-		httpPorts = append(httpPorts, f.opts.httpPorts...)
-	} else {
-		httpPorts = append(httpPorts, httpPort)
-	}
-	haveHTTP := false
-	for _, port := range httpPorts {
-		if int(tcp.DstPort) == port || int(tcp.SrcPort) == port {
-			haveHTTP = true
+	prefix := tcp.Payload[:11]
+	havePrefix := false
+	for _, p := range httpPrefixes {
+		if bytes.HasPrefix(prefix, p) {
+			havePrefix = true
 			break
 		}
+	}
+	if !havePrefix {
+		return ""
+	}
+
+	haveHTTP := false
+	payload := string(tcp.Payload)
+	if reHttpCommonRequest.FindString(payload) != "" ||
+		reHttpConnectRequest.FindString(payload) != "" ||
+		reHttpResponse.FindString(payload) != "" {
+		haveHTTP = true
 	}
 	if !haveHTTP {
 		return ""
