@@ -11,8 +11,6 @@ type Options struct {
 	rawContent      []byte
 	FormatedContent []byte
 
-	httpPorts []int
-
 	Quiet bool
 }
 
