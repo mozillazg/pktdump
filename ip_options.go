@@ -69,6 +69,9 @@ func formatIpRoute(opt layers.IPv4Option) string {
 		}
 		offset += 4
 	}
+	if len(ips) > 1 {
+		ips[0] = ips[0] + ","
+	}
 
 	return strings.Join(ips, " ")
 }
