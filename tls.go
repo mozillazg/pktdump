@@ -20,6 +20,7 @@ func (f *Formatter) formatTls(packet *gopacket.Packet, tcp *layers.TCP, length i
 
 	buf := strings.Builder{}
 	var hts []string
+	var version layers.TLSVersion
 	for _, handshake := range tls.Handshake {
 		th = &handshake.TLSRecordHeader
 		switch handshake.HandshakeType {
@@ -27,11 +28,16 @@ func (f *Formatter) formatTls(packet *gopacket.Packet, tcp *layers.TCP, length i
 			hts = append(hts, fmt.Sprintf("%s (SNI=%s)", handshake.HandshakeType, handshake.ClientHello.SNI))
 		case layers.TLSHandshakeServerHello:
 			hts = append(hts, handshake.HandshakeType.String())
+			if len(handshake.ServerHello.SupportedVersions) > 0 {
+				version = handshake.ServerHello.SupportedVersions[0]
+			}
 		}
 	}
 	if th != nil && len(hts) > 0 {
-		version := getTlsVersion(*th)
-		buf.WriteString(version + ": ")
+		if version == 0 {
+			version = th.Version
+		}
+		buf.WriteString(formatTlsVersion(version) + ": ")
 		buf.WriteString(strings.Join(hts, ", "))
 	}
 
@@ -82,7 +88,7 @@ func getTlsRecordHeader(tls *layers.TLS) *layers.TLSRecordHeader {
 	return nil
 }
 
-func getTlsVersion(th layers.TLSRecordHeader) string {
-	version := th.Version.String()
+func formatTlsVersion(tv layers.TLSVersion) string {
+	version := tv.String()
 	return strings.Replace(version, " ", "v", 1)
 }
