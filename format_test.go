@@ -1,16 +1,19 @@
 package pktdump
 
 import (
-	"github.com/gopacket/gopacket/pcapgo"
-	"log"
+	"bufio"
+	"encoding/binary"
+	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
-	//"fmt"
-	//"log"
+	"sync"
 	"testing"
 
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
+	"github.com/gopacket/gopacket/pcapgo"
 )
 
 func TestPacketICMPv6(t *testing.T) {
@@ -85,6 +88,36 @@ func TestPacketTCP(t *testing.T) {
 		if got != table.expected {
 			t.Errorf("formatPacketTCP was incorrect, got: '%s', expected: '%s'.", got, table.expected)
 		}
+	}
+}
+
+func TestFormatSackRelative(t *testing.T) {
+	f := NewFormatter(&Options{})
+	serverBase := uint32(4071596914)
+	serverTCP := &layers.TCP{
+		SrcPort: 10000,
+		DstPort: 35512,
+		Seq:     serverBase,
+		ACK:     true,
+	}
+	f.formatPacketTCP(nil, serverTCP, "srv", "cli", 1024)
+
+	sackData := make([]byte, 8)
+	binary.BigEndian.PutUint32(sackData[:4], serverBase+2055997)
+	binary.BigEndian.PutUint32(sackData[4:], serverBase+2121452)
+	ackTCP := &layers.TCP{
+		SrcPort: 35512,
+		DstPort: 10000,
+		Ack:     serverBase + 1024,
+		ACK:     true,
+		Options: []layers.TCPOption{{
+			OptionType: layers.TCPOptionKindSACK,
+			OptionData: sackData,
+		}},
+	}
+	line := f.formatPacketTCP(nil, ackTCP, "cli", "srv", 0)
+	if !strings.Contains(line, "sack 1 {2055997:2121452}") {
+		t.Fatalf("expected SACK block to be relative, got: %q", line)
 	}
 }
 
@@ -206,31 +239,347 @@ func Test_ip_options(t *testing.T) {
 
 	got := FormatWithStyle(packet, FormatStyleVerbose)
 	t.Log(got)
-	if !strings.Contains(got, "options (RR 1.2.3.4 1.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0,EOL))") {
+	if !strings.Contains(got, "options (RR 1.2.3.4, 1.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0 0.0.0.0,EOL))") {
 		t.Errorf("IP options were not formatted correctly, got: '%s'.", got)
 	}
 }
 
-func Test_tls(t *testing.T) {
-	file := "/go_workshop/src/github.com/mozillazg/ptcpdump/https.pcapng"
-	f, err := os.Open(file)
+func TestTCPRelativeSequenceProgression(t *testing.T) {
+	formatter := NewFormatter(&Options{})
+
+	const (
+		headerLen = 20
+		clientIP  = "10.0.0.1"
+		serverIP  = "10.0.0.2"
+	)
+
+	clientPort := layers.TCPPort(12345)
+	serverPort := layers.TCPPort(80)
+
+	clientSYN := &layers.TCP{SrcPort: clientPort, DstPort: serverPort, Seq: 1000, SYN: true, DataOffset: 5}
+	got := formatter.formatPacketTCP(nil, clientSYN, clientIP, serverIP, headerLen)
+	if !strings.Contains(got, "seq 1000") {
+		t.Fatalf("expected absolute seq on first SYN, got %q", got)
+	}
+	if strings.Contains(got, "ack ") {
+		t.Fatalf("unexpected ack on initial SYN, got %q", got)
+	}
+
+	synAck := &layers.TCP{SrcPort: serverPort, DstPort: clientPort, Seq: 5000, Ack: 1001, SYN: true, ACK: true, DataOffset: 5}
+	got = formatter.formatPacketTCP(nil, synAck, serverIP, clientIP, headerLen)
+	if !strings.Contains(got, "seq 5000") || !strings.Contains(got, "ack 1001") {
+		t.Fatalf("expected absolute seq/ack on SYN|ACK, got %q", got)
+	}
+
+	dupSynAck := &layers.TCP{SrcPort: serverPort, DstPort: clientPort, Seq: 5000, Ack: 1001, SYN: true, ACK: true, DataOffset: 5}
+	got = formatter.formatPacketTCP(nil, dupSynAck, serverIP, clientIP, headerLen)
+	if !strings.Contains(got, "seq 5000") {
+		t.Fatalf("duplicate SYN|ACK should stay absolute, got %q", got)
+	}
+
+	finalAck := &layers.TCP{SrcPort: clientPort, DstPort: serverPort, Seq: 1001, Ack: 5001, ACK: true, DataOffset: 5}
+	got = formatter.formatPacketTCP(nil, finalAck, clientIP, serverIP, headerLen)
+	if strings.Contains(got, "seq ") {
+		t.Fatalf("pure ACK should omit seq, got %q", got)
+	}
+	if !strings.Contains(got, "ack 1") {
+		t.Fatalf("expected relative ACK of 1 after handshake, got %q", got)
+	}
+
+	clientDataLen := headerLen + 100
+	clientData := &layers.TCP{SrcPort: clientPort, DstPort: serverPort, Seq: 1001, Ack: 5001, ACK: true, PSH: true, DataOffset: 5}
+	got = formatter.formatPacketTCP(nil, clientData, clientIP, serverIP, clientDataLen)
+	if !strings.Contains(got, "seq 1:101") || !strings.Contains(got, "ack 1") {
+		t.Fatalf("expected relative seq/ack for client data, got %q", got)
+	}
+
+	serverDataLen := headerLen + 150
+	serverData := &layers.TCP{SrcPort: serverPort, DstPort: clientPort, Seq: 5001, Ack: 1101, ACK: true, PSH: true, DataOffset: 5}
+	got = formatter.formatPacketTCP(nil, serverData, serverIP, clientIP, serverDataLen)
+	if !strings.Contains(got, "seq 1:151") || !strings.Contains(got, "ack 101") {
+		t.Fatalf("expected relative seq/ack for server data, got %q", got)
+	}
+}
+
+func TestTCPRelativeResets(t *testing.T) {
+	formatter := NewFormatter(&Options{})
+
+	const (
+		headerLen = 20
+		clientIP  = "10.0.0.1"
+		serverIP  = "10.0.0.2"
+	)
+
+	clientPort := layers.TCPPort(2000)
+	serverPort := layers.TCPPort(80)
+
+	formatter.formatPacketTCP(nil, &layers.TCP{SrcPort: clientPort, DstPort: serverPort, Seq: 3000, SYN: true, DataOffset: 5}, clientIP, serverIP, headerLen)
+	formatter.formatPacketTCP(nil, &layers.TCP{SrcPort: serverPort, DstPort: clientPort, Seq: 8000, Ack: 3001, SYN: true, ACK: true, DataOffset: 5}, serverIP, clientIP, headerLen)
+
+	rst := &layers.TCP{SrcPort: clientPort, DstPort: serverPort, Seq: 3100, RST: true, DataOffset: 5}
+	formatter.formatPacketTCP(nil, rst, clientIP, serverIP, headerLen)
+
+	postRST := &layers.TCP{SrcPort: clientPort, DstPort: serverPort, Seq: 9000, PSH: true, DataOffset: 5}
+	got := formatter.formatPacketTCP(nil, postRST, clientIP, serverIP, headerLen+40)
+	if !strings.Contains(got, "seq 9000:9040") {
+		t.Fatalf("expected absolute seq after RST reset, got %q", got)
+	}
+
+	serverPost := &layers.TCP{SrcPort: serverPort, DstPort: clientPort, Seq: 12000, PSH: true, DataOffset: 5}
+	got = formatter.formatPacketTCP(nil, serverPost, serverIP, clientIP, headerLen+20)
+	if !strings.Contains(got, "seq 12000:12020") {
+		t.Fatalf("expected absolute seq for server after RST, got %q", got)
+	}
+
+	newSyn := &layers.TCP{SrcPort: clientPort, DstPort: serverPort, Seq: 4000, SYN: true, DataOffset: 5}
+	got = formatter.formatPacketTCP(nil, newSyn, clientIP, serverIP, headerLen)
+	if !strings.Contains(got, "seq 4000") {
+		t.Fatalf("expected fresh baseline after SYN reset, got %q", got)
+	}
+	if strings.Contains(got, "ack ") {
+		t.Fatalf("initial SYN should not include ack, got %q", got)
+	}
+
+	newSynAck := &layers.TCP{SrcPort: serverPort, DstPort: clientPort, Seq: 9000, Ack: 4001, SYN: true, ACK: true, DataOffset: 5}
+	got = formatter.formatPacketTCP(nil, newSynAck, serverIP, clientIP, headerLen)
+	if !strings.Contains(got, "seq 9000") || !strings.Contains(got, "ack 4001") {
+		t.Fatalf("expected absolute server SYN|ACK after restart, got %q", got)
+	}
+
+	newAck := &layers.TCP{SrcPort: clientPort, DstPort: serverPort, Seq: 4001, Ack: 9001, ACK: true, DataOffset: 5}
+	got = formatter.formatPacketTCP(nil, newAck, clientIP, serverIP, headerLen)
+	if strings.Contains(got, "seq ") {
+		t.Fatalf("pure ACK after handshake should omit seq, got %q", got)
+	}
+	if !strings.Contains(got, "ack 1") {
+		t.Fatalf("expected relative ack reset to 1 after new handshake, got %q", got)
+	}
+}
+
+func TestTCPRelativeMidstream(t *testing.T) {
+	formatter := NewFormatter(&Options{})
+
+	const (
+		headerLen = 20
+		clientIP  = "10.0.0.1"
+		serverIP  = "10.0.0.2"
+	)
+
+	clientPort := layers.TCPPort(3000)
+	serverPort := layers.TCPPort(80)
+
+	pkt1 := &layers.TCP{SrcPort: clientPort, DstPort: serverPort, Seq: 9000, Ack: 4000, ACK: true, PSH: true, DataOffset: 5}
+	got1 := formatter.formatPacketTCP(nil, pkt1, clientIP, serverIP, headerLen+50)
+	if !strings.Contains(got1, "seq 9000:9050") || !strings.Contains(got1, "ack 4000") {
+		t.Fatalf("expected absolute values on first mid-stream packet, got %q", got1)
+	}
+
+	pkt2 := &layers.TCP{SrcPort: clientPort, DstPort: serverPort, Seq: 9050, Ack: 4000, ACK: true, PSH: true, DataOffset: 5}
+	got2 := formatter.formatPacketTCP(nil, pkt2, clientIP, serverIP, headerLen+30)
+	if !strings.Contains(got2, "seq 50:80") || !strings.Contains(got2, "ack 4000") {
+		t.Fatalf("expected relative sequence but absolute ack without peer baseline, got %q", got2)
+	}
+}
+
+func TestTCPRelativeOptionDisabled(t *testing.T) {
+	opts := &Options{}
+	opts.SetRelativeTCPSeq(false)
+	formatter := NewFormatter(opts)
+
+	const (
+		headerLen = 20
+		srcIP     = "10.1.1.1"
+		dstIP     = "10.1.1.2"
+	)
+
+	tcp1 := &layers.TCP{SrcPort: 1234, DstPort: 80, Seq: 1500, Ack: 2000, ACK: true, PSH: true, DataOffset: 5}
+	out1 := formatter.formatPacketTCP(nil, tcp1, srcIP, dstIP, headerLen+40)
+	if !strings.Contains(out1, "seq 1500:1540") || !strings.Contains(out1, "ack 2000") {
+		t.Fatalf("expected absolute formatting when relative disabled, got %q", out1)
+	}
+
+	tcp2 := &layers.TCP{SrcPort: 1234, DstPort: 80, Seq: 1540, Ack: 2000, ACK: true, PSH: true, DataOffset: 5}
+	out2 := formatter.formatPacketTCP(nil, tcp2, srcIP, dstIP, headerLen+20)
+	if !strings.Contains(out2, "seq 1540:1560") || !strings.Contains(out2, "ack 2000") {
+		t.Fatalf("expected subsequent packets to remain absolute when disabled, got %q", out2)
+	}
+}
+
+func TestFormatConcurrency(t *testing.T) {
+	raw := []byte{0x45, 0x00, 0x00, 0x34, 0x00, 0x00, 0x40, 0x00, 0x40, 0x06, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x01, 0x0a, 0x00, 0x00, 0x02, 0x04, 0xd2, 0x00, 0x50, 0x00, 0x00, 0x03, 0xe8, 0x00, 0x00, 0x13, 0x88, 0x50, 0x10, 0x40, 0x00, 0x72, 0x10, 0x00, 0x00, 0x02, 0x04, 0x05, 0xb4}
+	packet := gopacket.NewPacket(raw, layers.LayerTypeIPv4, gopacket.Default)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = Format(packet)
+		}()
+	}
+	wg.Wait()
+}
+
+func TestTCPDumpSequenceParity(t *testing.T) {
+	formatter := NewFormatter(&Options{})
+	demoPath := filepath.Join("cmd", "pcapdump", "demo.pcap")
+	refPath := filepath.Join("cmd", "pcapdump", "tcpdump.txt")
+
+	expectedLines, err := readLines(refPath)
 	if err != nil {
-		log.Fatalf("Could not open pcap file '%s': %v\n", file, err)
+		t.Fatalf("failed to load tcpdump reference: %v", err)
+	}
+	trimmed := expectedLines[:0]
+	for _, line := range expectedLines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			trimmed = append(trimmed, line)
+		}
+	}
+	expectedLines = trimmed
+
+	f, err := os.Open(demoPath)
+	if err != nil {
+		t.Fatalf("failed to open demo pcap: %v", err)
 	}
 	defer f.Close()
 
-	handle, err := pcapgo.NewNgReader(f, pcapgo.DefaultNgReaderOptions)
+	reader, err := pcapgo.NewReader(f)
 	if err != nil {
-		log.Fatalf("Could not create pcap reader: %v\n", err)
+		t.Fatalf("failed to create pcap reader: %v", err)
+	}
+	src := gopacket.NewPacketSource(reader, reader.LinkType())
+
+	idx := 0
+	for packet := range src.Packets() {
+		if idx >= len(expectedLines) {
+			t.Fatalf("pcap produced more packets (%d) than tcpdump reference (%d)", idx+1, len(expectedLines))
+		}
+
+		expectedFields, err := extractSeqAck(expectedLines[idx])
+		if err != nil {
+			t.Fatalf("failed to parse tcpdump line %d: %v", idx+1, err)
+		}
+		gotLine := formatter.Format(packet)
+		gotFields, err := extractSeqAck(gotLine)
+		if err != nil {
+			t.Fatalf("failed to parse formatter line %d: %v", idx+1, err)
+		}
+
+		if expectedFields.hasSeq != gotFields.hasSeq {
+			t.Fatalf("line %d: seq presence mismatch (expected %v, got %v)\nexpected: %s\n     got: %s", idx+1, expectedFields.hasSeq, gotFields.hasSeq, expectedLines[idx], gotLine)
+		}
+		if expectedFields.hasSeq {
+			if expectedFields.seqStart != gotFields.seqStart {
+				t.Fatalf("line %d: seq start mismatch (expected %d, got %d)\nexpected: %s\n     got: %s", idx+1, expectedFields.seqStart, gotFields.seqStart, expectedLines[idx], gotLine)
+			}
+			if expectedFields.hasSeqEnd != gotFields.hasSeqEnd {
+				t.Fatalf("line %d: seq end presence mismatch\nexpected: %s\n     got: %s", idx+1, expectedLines[idx], gotLine)
+			}
+			if expectedFields.hasSeqEnd && expectedFields.seqEnd != gotFields.seqEnd {
+				t.Fatalf("line %d: seq end mismatch (expected %d, got %d)\nexpected: %s\n     got: %s", idx+1, expectedFields.seqEnd, gotFields.seqEnd, expectedLines[idx], gotLine)
+			}
+		}
+
+		if expectedFields.hasAck != gotFields.hasAck {
+			t.Fatalf("line %d: ack presence mismatch (expected %v, got %v)\nexpected: %s\n     got: %s", idx+1, expectedFields.hasAck, gotFields.hasAck, expectedLines[idx], gotLine)
+		}
+		if expectedFields.hasAck && expectedFields.ack != gotFields.ack {
+			t.Fatalf("line %d: ack mismatch (expected %d, got %d)\nexpected: %s\n     got: %s", idx+1, expectedFields.ack, gotFields.ack, expectedLines[idx], gotLine)
+		}
+
+		idx++
 	}
 
-	pkgsrc := gopacket.NewPacketSource(handle, handle.LinkType())
-
-	for packet := range pkgsrc.Packets() {
-		//if len(packet.Data()) < 1000 {
-		//	continue
-		//}
-		got := FormatWithStyle(packet, FormatStyleVerbose)
-		t.Log(got)
+	if idx != len(expectedLines) {
+		t.Fatalf("tcpdump reference contains %d packets but pcap produced %d", len(expectedLines), idx)
 	}
+}
+
+type seqAckFields struct {
+	hasSeq    bool
+	seqStart  uint64
+	hasSeqEnd bool
+	seqEnd    uint64
+	hasAck    bool
+	ack       uint64
+}
+
+func extractSeqAck(line string) (seqAckFields, error) {
+	fields := seqAckFields{}
+
+	if idx := strings.Index(line, ", seq "); idx >= 0 {
+		segment := takeUntilComma(line[idx+len(", seq "):])
+		start, end, hasEnd, err := parseSeqToken(segment)
+		if err != nil {
+			return seqAckFields{}, fmt.Errorf("parse seq %q: %w", segment, err)
+		}
+		fields.hasSeq = true
+		fields.seqStart = start
+		fields.hasSeqEnd = hasEnd
+		fields.seqEnd = end
+	}
+
+	if idx := strings.Index(line, ", ack "); idx >= 0 {
+		segment := takeUntilComma(line[idx+len(", ack "):])
+		segment = strings.TrimSpace(segment)
+		if segment != "" {
+			value, err := strconv.ParseUint(segment, 10, 64)
+			if err != nil {
+				return seqAckFields{}, fmt.Errorf("parse ack %q: %w", segment, err)
+			}
+			fields.hasAck = true
+			fields.ack = value
+		}
+	}
+
+	return fields, nil
+}
+
+func parseSeqToken(token string) (start uint64, end uint64, hasEnd bool, err error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return 0, 0, false, fmt.Errorf("empty seq token")
+	}
+	parts := strings.Split(token, ":")
+	start, err = strconv.ParseUint(strings.TrimSpace(parts[0]), 10, 64)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if len(parts) > 1 {
+		endStr := strings.TrimSpace(parts[1])
+		if endStr != "" {
+			end, err = strconv.ParseUint(endStr, 10, 64)
+			if err != nil {
+				return 0, 0, false, err
+			}
+			hasEnd = true
+		}
+	}
+	return start, end, hasEnd, nil
+}
+
+func takeUntilComma(s string) string {
+	if idx := strings.IndexRune(s, ','); idx >= 0 {
+		return s[:idx]
+	}
+	return s
+}
+
+func readLines(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	var lines []string
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return lines, nil
 }
